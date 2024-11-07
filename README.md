@@ -1,3 +1,5 @@
+# VEIFKA
+
 Log-structured Merge Tree DB with Fjall-rs backend and RESP frontend.
 - https://github.com/fjall-rs/fjall
 
@@ -11,3 +13,6 @@ OK
 127.0.0.1 > GET testkey
 testval
 ```
+
+
+> NOTE: This is very much POC
