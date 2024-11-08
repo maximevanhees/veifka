@@ -1,4 +1,4 @@
-use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle};
+use fjall::{Config, Error, Keyspace, PartitionCreateOptions, PartitionHandle};
 use futures::stream::StreamExt;
 use futures::SinkExt;
 use redis_protocol::resp2::types::BytesFrame;
@@ -131,6 +131,36 @@ async fn handle_command(frame: BytesFrame, partition: &PartitionHandle) -> Bytes
                         Ok(Ok(Some(value))) => BytesFrame::BulkString(value.to_vec().into()),
                         Ok(Ok(None)) => BytesFrame::Null,
                         Ok(Err(e)) => BytesFrame::Error(format!("ERR GET error: {:?}", e).into()),
+                        Err(e) => BytesFrame::Error(format!("ERR task error: {:?}", e).into()),
+                    }
+                }
+                "DEL" => {
+                    if commands.len() < 2 {
+                        return BytesFrame::Error("ERR Wrong number of arguments for DEL".into());
+                    }
+                    let keys: Vec<_> = commands[1..]
+                        .iter()
+                        .filter_map(|cmd| match cmd {
+                            BytesFrame::BulkString(bytes) => Some(bytes.clone()),
+                            _ => None,
+                        })
+                        .collect();
+
+                    let partition = partition.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        let mut deleted = 0;
+                        for key in keys {
+                            if partition.remove(&key).is_ok() {
+                                deleted += 1;
+                            }
+                        }
+                        Ok::<i64, fjall::Error>(deleted)
+                    })
+                    .await
+                    {
+                        // or should we send over SimpleString with "deleted X keys"?
+                        Ok(Ok(amount_deleted)) => BytesFrame::Integer(amount_deleted),
+                        Ok(Err(e)) => BytesFrame::Error(format!("ERR DEL error: {:?}", e).into()),
                         Err(e) => BytesFrame::Error(format!("ERR task error: {:?}", e).into()),
                     }
                 }
