@@ -164,6 +164,57 @@ async fn handle_command(frame: BytesFrame, partition: &PartitionHandle) -> Bytes
                         Err(e) => BytesFrame::Error(format!("ERR task error: {:?}", e).into()),
                     }
                 }
+                "EXISTS" => {
+                    if commands.len() != 2 {
+                        return BytesFrame::Error(
+                            "ERR Wrong number of arguments for EXISTS".into(),
+                        );
+                    }
+                    let key = match &commands[1] {
+                        BytesFrame::BulkString(bytes) => bytes.clone(),
+                        _ => return BytesFrame::Error("ERR Invalid key type".into()),
+                    };
+                    let partition = partition.clone();
+                    match tokio::task::spawn_blocking(move || partition.get(&key)).await {
+                        Ok(Ok(Some(_))) => BytesFrame::Integer(1),
+                        Ok(Ok(None)) => BytesFrame::Integer(0),
+                        Ok(Err(e)) => {
+                            BytesFrame::Error(format!("ERR EXISTS error: {:?}", e).into())
+                        }
+                        Err(e) => BytesFrame::Error(format!("ERR task error: {:?}", e).into()),
+                    }
+                }
+                "MGET" => {
+                    if commands.len() < 2 {
+                        return BytesFrame::Error("ERR Wrong number of arguments for MGET".into());
+                    }
+                    let keys: Vec<_> = commands[1..]
+                        .iter()
+                        .filter_map(|cmd| match cmd {
+                            BytesFrame::BulkString(bytes) => Some(bytes.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    let partition = partition.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        let mut results = Vec::with_capacity(keys.len());
+                        for key in keys {
+                            match partition.get(&key)? {
+                                Some(value) => {
+                                    results.push(BytesFrame::BulkString(value.to_vec().into()))
+                                }
+                                None => results.push(BytesFrame::Null),
+                            }
+                        }
+                        Ok::<Vec<BytesFrame>, fjall::Error>(results)
+                    })
+                    .await
+                    {
+                        Ok(Ok(results)) => BytesFrame::Array(results),
+                        Ok(Err(e)) => BytesFrame::Error(format!("ERR MGET error: {:?}", e).into()),
+                        Err(e) => BytesFrame::Error(format!("ERR task error: {:?}", e).into()),
+                    }
+                }
                 _ => BytesFrame::Error(format!("ERR unknown command '{}'", cmd).into()),
             }
         }
