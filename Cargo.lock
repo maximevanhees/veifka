@@ -736,6 +736,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f54a172d0620933a27a4360d3db3e2ae0dd6cceae9730751a036bbf182c4b23"
 
 [[package]]
+name = "veifka"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "fjall",
+ "futures",
+ "redis-protocol",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "wasi"
 version = "0.11.0+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -828,17 +842,3 @@ name = "xxhash-rust"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a5cbf750400958819fb6178eaa83bee5cd9c29a26a40cc241df8c70fdd46984"
-
-[[package]]
-name = "zero-db-rs"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "fjall",
- "futures",
- "redis-protocol",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
-]
