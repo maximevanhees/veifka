@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct DataStore {
+    // Keep keyspace around as long as we need it's partitions!
     keyspace: Keyspace,
     partition_handle: Arc<PartitionHandle>,
 }
@@ -12,13 +13,16 @@ impl DataStore {
     pub fn new(keyspace_name: &str, partition_name: &str) -> Result<Self, DataStoreError> {
         // A keyspace is a database, which may contain multiple collections ("partitions")
         let keyspace = Config::new(keyspace_name)
-            // .max_write_buffer_size(1 * 1024 * 1024) // 64 MB is default
             .open()
             .map_err(|e| DataStoreError::KeyspaceError(e.to_string()))?;
 
         // Each partition is its own physical LSM-tree
         let partition_handle = keyspace
-            .open_partition(partition_name, PartitionCreateOptions::default())
+            .open_partition(
+                partition_name,
+                // Manual journal persist is done for testing write amplification
+                PartitionCreateOptions::default().manual_journal_persist(true),
+            )
             .map_err(|e| DataStoreError::PartitionError(e.to_string()))?;
 
         Ok(DataStore {
