@@ -1,9 +1,10 @@
 use crate::DataStoreError;
-use fjall::{Config, PartitionCreateOptions, PartitionHandle};
+use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle};
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct DataStore {
+    keyspace: Keyspace,
     partition_handle: Arc<PartitionHandle>,
 }
 
@@ -11,6 +12,7 @@ impl DataStore {
     pub fn new(keyspace_name: &str, partition_name: &str) -> Result<Self, DataStoreError> {
         // A keyspace is a database, which may contain multiple collections ("partitions")
         let keyspace = Config::new(keyspace_name)
+            // .max_write_buffer_size(1 * 1024 * 1024) // 64 MB is default
             .open()
             .map_err(|e| DataStoreError::KeyspaceError(e.to_string()))?;
 
@@ -20,8 +22,13 @@ impl DataStore {
             .map_err(|e| DataStoreError::PartitionError(e.to_string()))?;
 
         Ok(DataStore {
+            keyspace,
             partition_handle: Arc::new(partition_handle),
         })
+    }
+
+    pub fn keyspace(&self) -> &Keyspace {
+        &self.keyspace
     }
 
     pub fn partition_handle(&self) -> Arc<PartitionHandle> {
