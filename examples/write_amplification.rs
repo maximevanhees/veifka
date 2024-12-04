@@ -1,11 +1,12 @@
 use clap::Parser;
+use fjall::PartitionCreateOptions;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::SeedableRng;
 use rand::{distributions::Alphanumeric, Rng};
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use veifka::DataStore;
+use veifka::{DataStore, DataStorePartition};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -43,8 +44,12 @@ struct TestResult {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
+    let data_store = DataStore::new(args.db_path.to_str().unwrap()).unwrap();
+    // // Flush active journal
+    // data_store.keyspace().persist(fjall::PersistMode::SyncAll)?;
+
     if args.run_all {
-        run_all_combinations(&args.db_path)?;
+        run_all_combinations(&data_store)?;
     } else {
         // Ensure all required parameters are provided for single test
         let key_size = args
@@ -55,61 +60,81 @@ fn main() -> Result<(), Box<dyn Error>> {
             .ok_or("value_size is required for single test")?;
         let count = args.count.ok_or("count is required for single test")?;
 
-        run_single_test(&args.db_path, key_size, value_size, count)?;
+        run_single_test(&data_store, key_size, value_size, count)?;
     }
 
     Ok(())
 }
 
 fn run_single_test(
-    db_path: &PathBuf,
+    data_store: &DataStore,
     key_size: usize,
     value_size: usize,
     count: usize,
 ) -> Result<(), Box<dyn Error>> {
-    let data_store = DataStore::new(db_path.to_str().unwrap(), "test_partition")?;
+    let partition_name = format!("test_partition_k{}_v{}_c{}", key_size, value_size, count);
+    let partition_handle = data_store.create_partition(&partition_name)?;
+    let partition = DataStorePartition::new(partition_handle);
 
-    let total_written = generate_and_write_kv_pairs(&data_store, key_size, value_size, count)?;
+    let total_written = generate_and_write_kv_pairs(&partition, key_size, value_size, count)?;
 
     println!("Total data written: {} bytes", total_written);
     println!(
-        "Data written: {:.2} MB",
+        "Total data written in MB: {:.3} MB",
         total_written as f64 / (1024.0 * 1024.0)
     );
     println!(
         "Disk space usage from keyspace: {}",
         data_store.keyspace().disk_space()
     );
+    // Get disk usage for this partition
+    let partition_handle = data_store
+        .keyspace()
+        .open_partition(&partition_name, PartitionCreateOptions::default())?;
+    let disk_usage = partition_handle.disk_space();
+    println!("Disk space usage from partition: {}", disk_usage);
 
     Ok(())
 }
 
-fn run_all_combinations(base_db_path: &PathBuf) -> Result<(), Box<dyn Error>> {
-    let key_sizes = vec![16, 32, 64, 128];
-    let value_sizes = vec![16, 32, 64, 128, 256];
-    let counts = vec![10000, 100000, 1000000];
+fn run_all_combinations(data_store: &DataStore) -> Result<(), Box<dyn Error>> {
+    let key_sizes = [16, 32, 64, 128];
+    let value_sizes = [16, 32, 64, 128, 256];
+    let counts = [10000, 100000, 1000000];
 
     let mut results = Vec::new();
 
     for key_size in key_sizes.iter() {
         for value_size in value_sizes.iter() {
             for count in counts.iter() {
-                let db_path =
-                    base_db_path.join(format!("data_k{}_v{}_{}", key_size, value_size, count));
-
                 println!(
                     "\nRunning test: key_size={}, value_size={}, count={}",
                     key_size, value_size, count
                 );
 
-                let data_store = DataStore::new(db_path.to_str().unwrap(), "test_partition")?;
-                let total_written =
-                    generate_and_write_kv_pairs(&data_store, *key_size, *value_size, *count)?;
+                // Create a unique partition for each test
+                let partition_name =
+                    format!("test_partition_k{}_v{}_c{}", key_size, value_size, count);
+                let partition_handle = data_store.create_partition(&partition_name)?;
+                let partition_data_store = DataStorePartition::new(partition_handle);
 
+                let total_written = generate_and_write_kv_pairs(
+                    &partition_data_store,
+                    *key_size,
+                    *value_size,
+                    *count,
+                )?;
                 // Flush active journal
-                data_store.keyspace().persist(fjall::PersistMode::SyncAll)?;
+                // data_store.keyspace().persist(fjall::PersistMode::SyncAll)?;
 
-                let disk_usage = data_store.keyspace().disk_space();
+                // Add a small delay to ensure all disk operations are complete
+                // std::thread::sleep(std::time::Duration::from_millis(100));
+
+                // Get disk usage for this partition
+                let partition_handle = data_store
+                    .keyspace()
+                    .open_partition(&partition_name, PartitionCreateOptions::default())?;
+                let disk_usage = partition_handle.disk_space();
                 let write_amp = disk_usage as f64 / total_written as f64;
 
                 results.push(TestResult {
@@ -120,17 +145,20 @@ fn run_all_combinations(base_db_path: &PathBuf) -> Result<(), Box<dyn Error>> {
                     disk_usage,
                     write_amp,
                 });
-
                 println!(
                     "Key Size: {}, Value Size: {}, Count: {}",
                     key_size, value_size, count
                 );
-                println!("Total Written: {} bytes", total_written);
-                println!("Disk Usage: {} bytes", disk_usage);
+                println!("Total data written: {} bytes", total_written);
+                println!(
+                    "Total data written (in MB): {:.3} MB",
+                    total_written as f64 / (1024.0 * 1024.0)
+                );
+                println!("Partition disk Usage: {} bytes", disk_usage);
                 println!("Write Amplification: {:.2}", write_amp);
                 println!("----------------------------------------");
 
-                std::fs::remove_dir_all(&db_path)?;
+                // std::fs::remove_dir_all(&db_path)?;
             }
         }
     }
@@ -154,7 +182,7 @@ fn run_all_combinations(base_db_path: &PathBuf) -> Result<(), Box<dyn Error>> {
 }
 
 fn generate_and_write_kv_pairs(
-    data_store: &DataStore,
+    partition: &DataStorePartition,
     key_size: usize,
     value_size: usize,
     count: usize,
@@ -173,7 +201,7 @@ fn generate_and_write_kv_pairs(
     for _ in 0..count {
         let key = generate_random_bytes(&mut rng, key_size);
         let value = generate_random_bytes(&mut rng, value_size);
-        data_store.set(&key, &value)?;
+        partition.set(&key, &value)?;
         total_bytes += key.len() + value.len();
         pb.inc(1);
     }

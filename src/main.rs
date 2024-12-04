@@ -4,11 +4,13 @@ use redis_protocol::resp2::types::BytesFrame;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-use veifka::{DataStore, DataStoreError};
+use veifka::{DataStore, DataStoreError, DataStorePartition};
 
 #[tokio::main]
 async fn main() -> Result<(), DataStoreError> {
-    let datastore = DataStore::new("test_datastore", "test_partition");
+    let datastore = DataStore::new("test_datastore")?;
+    let partition_handle = datastore.create_partition("default_partition")?;
+    let partition = DataStorePartition::new(partition_handle);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:6379")
         .await
@@ -20,9 +22,9 @@ async fn main() -> Result<(), DataStoreError> {
             .await
             .expect("Failed to accept connection");
 
-        let datastore = datastore.clone()?;
+        let partition = partition.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_client(socket, datastore).await {
+            if let Err(e) = handle_client(socket, partition).await {
                 eprintln!("Error handling client: {:?}", e)
             }
         });
@@ -31,13 +33,13 @@ async fn main() -> Result<(), DataStoreError> {
 
 async fn handle_client(
     socket: TcpStream,
-    datastore: DataStore,
+    partition: DataStorePartition,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut framed = Framed::new(socket, redis_protocol::codec::Resp2);
     while let Some(result) = framed.next().await {
         match result {
             Ok(frame) => {
-                let response = handle_command(frame, &datastore).await;
+                let response = handle_command(frame, &partition).await;
                 framed.send(response).await?;
             }
             Err(e) => {
@@ -51,7 +53,7 @@ async fn handle_client(
     Ok(())
 }
 
-async fn handle_command(frame: BytesFrame, datastore: &DataStore) -> BytesFrame {
+async fn handle_command(frame: BytesFrame, partition: &DataStorePartition) -> BytesFrame {
     match frame {
         BytesFrame::SimpleString(_bytes) => todo!(),
         BytesFrame::Error(_str_inner) => todo!(),
@@ -84,8 +86,8 @@ async fn handle_command(frame: BytesFrame, datastore: &DataStore) -> BytesFrame 
                         BytesFrame::BulkString(bytes) => bytes.clone(),
                         _ => return BytesFrame::Error("ERR Invalid value type".into()),
                     };
-                    let datastore = datastore.clone();
-                    match tokio::task::spawn_blocking(move || datastore.set(&key, &value)).await {
+                    let partition = partition.clone();
+                    match tokio::task::spawn_blocking(move || partition.set(&key, &value)).await {
                         Ok(Ok(_)) => BytesFrame::SimpleString("OK".into()),
                         Ok(Err(e)) => BytesFrame::Error(format!("ERR SET error: {:?}", e).into()),
                         Err(e) => BytesFrame::Error(format!("ERR task error: {:?}", e).into()),
@@ -99,8 +101,8 @@ async fn handle_command(frame: BytesFrame, datastore: &DataStore) -> BytesFrame 
                         BytesFrame::BulkString(bytes) => bytes.clone(),
                         _ => return BytesFrame::Error("ERR Invalid key type".into()),
                     };
-                    let datastore = datastore.clone();
-                    match tokio::task::spawn_blocking(move || datastore.get(&key)).await {
+                    let partition = partition.clone();
+                    match tokio::task::spawn_blocking(move || partition.get(&key)).await {
                         Ok(Ok(Some(value))) => BytesFrame::BulkString(value.to_vec().into()),
                         Ok(Ok(None)) => BytesFrame::Null,
                         Ok(Err(e)) => BytesFrame::Error(format!("ERR GET error: {:?}", e).into()),
@@ -119,11 +121,11 @@ async fn handle_command(frame: BytesFrame, datastore: &DataStore) -> BytesFrame 
                         })
                         .collect();
 
-                    let datastore = datastore.clone();
+                    let partition = partition.clone();
                     match tokio::task::spawn_blocking(move || {
                         let mut deleted = 0;
                         for key in keys {
-                            if datastore.delete(&key).is_ok() {
+                            if partition.delete(&key).is_ok() {
                                 deleted += 1;
                             }
                         }
@@ -147,8 +149,8 @@ async fn handle_command(frame: BytesFrame, datastore: &DataStore) -> BytesFrame 
                         BytesFrame::BulkString(bytes) => bytes.clone(),
                         _ => return BytesFrame::Error("ERR Invalid key type".into()),
                     };
-                    let datastore = datastore.clone();
-                    match tokio::task::spawn_blocking(move || datastore.get(&key)).await {
+                    let partition = partition.clone();
+                    match tokio::task::spawn_blocking(move || partition.get(&key)).await {
                         Ok(Ok(Some(_))) => BytesFrame::Integer(1),
                         Ok(Ok(None)) => BytesFrame::Integer(0),
                         Ok(Err(e)) => {
@@ -168,11 +170,11 @@ async fn handle_command(frame: BytesFrame, datastore: &DataStore) -> BytesFrame 
                             _ => None,
                         })
                         .collect();
-                    let datastore = datastore.clone();
+                    let partition = partition.clone();
                     match tokio::task::spawn_blocking(move || {
                         let mut results = Vec::with_capacity(keys.len());
                         for key in keys {
-                            match datastore.get(&key)? {
+                            match partition.get(&key)? {
                                 Some(value) => {
                                     results.push(BytesFrame::BulkString(value.to_vec().into()))
                                 }
