@@ -49,7 +49,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // data_store.keyspace().persist(fjall::PersistMode::SyncAll)?;
 
     if args.run_all {
-        run_all_combinations(&data_store)?;
+        // run_all_combinations(&data_store)?;
+        run_all_combinations()?;
     } else {
         // Ensure all required parameters are provided for single test
         let key_size = args
@@ -97,10 +98,11 @@ fn run_single_test(
     Ok(())
 }
 
-fn run_all_combinations(data_store: &DataStore) -> Result<(), Box<dyn Error>> {
+// fn run_all_combinations(data_store: &DataStore) -> Result<(), Box<dyn Error>> {
+fn run_all_combinations() -> Result<(), Box<dyn Error>> {
     let key_sizes = [16, 32, 64, 128];
     let value_sizes = [16, 32, 64, 128, 256];
-    let counts = [10000, 100000, 1000000];
+    let counts = [100000, 1000000];
 
     let mut results = Vec::new();
 
@@ -111,6 +113,10 @@ fn run_all_combinations(data_store: &DataStore) -> Result<(), Box<dyn Error>> {
                     "\nRunning test: key_size={}, value_size={}, count={}",
                     key_size, value_size, count
                 );
+
+                let data_store_name = format!("datastore_k{}_v{}_c{}", key_size, value_size, count);
+                // Create a new datastore each time
+                let data_store = DataStore::new(&data_store_name)?;
 
                 // Create a unique partition for each test
                 let partition_name =
@@ -131,34 +137,37 @@ fn run_all_combinations(data_store: &DataStore) -> Result<(), Box<dyn Error>> {
                 // std::thread::sleep(std::time::Duration::from_millis(100));
 
                 // Get disk usage for this partition
-                let partition_handle = data_store
-                    .keyspace()
-                    .open_partition(&partition_name, PartitionCreateOptions::default())?;
-                let disk_usage = partition_handle.disk_space();
-                let write_amp = disk_usage as f64 / total_written as f64;
+                // let partition_handle = data_store
+                //     .keyspace()
+                //     .open_partition(&partition_name, PartitionCreateOptions::default())?;
+                // let disk_usage = partition_handle.disk_space();
+                let disk_usage_keyspace = data_store.keyspace().disk_space();
+                let write_amp = disk_usage_keyspace as f64 / total_written as f64;
 
                 results.push(TestResult {
                     key_size: *key_size,
                     value_size: *value_size,
                     count: *count,
                     total_written,
-                    disk_usage,
+                    disk_usage: disk_usage_keyspace,
                     write_amp,
                 });
                 println!(
                     "Key Size: {}, Value Size: {}, Count: {}",
                     key_size, value_size, count
                 );
-                println!("Total data written: {} bytes", total_written);
-                println!(
-                    "Total data written (in MB): {:.3} MB",
-                    total_written as f64 / (1024.0 * 1024.0)
-                );
-                println!("Partition disk Usage: {} bytes", disk_usage);
+                println!("Total data: {} bytes", total_written);
+                println!("Keyspace disk usage: {}", disk_usage_keyspace);
+
+                // println!(
+                //     "Total data written (in MB): {:.3} MB",
+                //     total_written as f64 / (1024.0 * 1024.0)
+                // );
+                // println!("Partition disk Usage: {} bytes", disk_usage);
                 println!("Write Amplification: {:.2}", write_amp);
                 println!("----------------------------------------");
 
-                // std::fs::remove_dir_all(&db_path)?;
+                std::fs::remove_dir_all(&data_store_name)?;
             }
         }
     }
